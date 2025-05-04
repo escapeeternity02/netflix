@@ -1,9 +1,10 @@
 import os
 import json
 import asyncio
+import time
+import random
+import re
 from telethon import TelegramClient, events, errors
-from telethon.tl.functions.messages import SendMessageRequest
-from telethon.tl.types import PeerUser
 from aiohttp import web
 from colorama import Fore, init
 
@@ -12,12 +13,8 @@ init(autoreset=True)
 CREDENTIALS_FOLDER = "sessions"
 LOG_RECEIVER = "EscapeEternity"
 
-KEYWORDS = [
-    "need netflix", "netflix", "need", "need nf", "nf need", "netflix screen need",
-    "need netflix screen", "netflix chaiye", "i need netflix", "netflix monthly need",
-    "need month netflix", "1 month netflix", "netflix account", "want netflix",
-    "netflix login", "buy netflix", "netflix required", "monthly netflix", "cheap netflix"
-]
+# Regular expression for detecting Netflix-related keywords
+KEYWORD_PATTERN = re.compile(r"(need|want|buy|get|have|month|screen|account|plan|premium|login|cheap).*?netflix", re.IGNORECASE)
 
 REPLY_MSG = "DM! I have in cheap."
 DM_MSG = """NETFLIX FULLY PRIVATE SCREEN ACCOUNT!!
@@ -31,6 +28,9 @@ ALWAYS ESCROW
 DM ~ @EscapeEternity"""
 FOLLOWUP_MSG = "This is BotAccount so DM @EscapeEternity for Anything!"
 
+# Track messaged users to avoid re-spamming
+messaged_users = {}
+
 async def start_web_server():
     async def handle(request):
         return web.Response(text="Service is running!")
@@ -41,7 +41,7 @@ async def start_web_server():
     await runner.setup()
     site = web.TCPSite(runner, '0.0.0.0', int(os.environ.get("PORT", 10000)))
     await site.start()
-    print(Fore.YELLOW + "Web server started to keep service alive.")
+    print(Fore.YELLOW + "Web server started.")
 
 async def handle_session(session_path):
     with open(session_path, "r") as f:
@@ -59,42 +59,70 @@ async def handle_session(session_path):
 
     await client.connect()
     if not await client.is_user_authorized():
-        print(Fore.RED + f"[{session_name}] Not authorized!")
+        print(Fore.RED + f"[{session_name}] Session unauthorized.")
         return
 
-    print(Fore.GREEN + f"[{session_name}] Connected.")
+    print(Fore.GREEN + f"[{session_name}] Running...")
 
     @client.on(events.NewMessage(incoming=True))
     async def keyword_handler(event):
         try:
-            if event.is_group and any(k in event.raw_text.lower() for k in KEYWORDS):
-                await event.reply(REPLY_MSG)
+            if event.is_private:
+                return  # We only care about group messages for this bot
 
+            message_text = event.raw_text.lower()
+
+            # Check if the message matches Netflix-related keywords using regex
+            if KEYWORD_PATTERN.search(message_text):
+                group = await event.get_chat()
                 user = await event.get_sender()
                 user_id = user.id
-                username = user.username or "No username"
-                msg_text = event.raw_text
-                group = await event.get_chat()
-                group_name = group.title if hasattr(group, "title") else str(group.id)
+                username = user.username or "no username"
+                key = f"{user_id}"
 
-                # Send DM
-                await client.send_message(PeerUser(user_id), DM_MSG)
+                # Avoid double messages per user (1 message per hour max)
+                now = time.time()
+                if key in messaged_users and now - messaged_users[key] < 3600:
+                    return
 
-                @client.on(events.NewMessage(from_users=user_id))
-                async def followup(ev):
-                    await client.send_message(PeerUser(user_id), FOLLOWUP_MSG)
+                # Reply in group
+                try:
+                    await event.reply(REPLY_MSG)
+                except errors.ChatWriteForbiddenError:
+                    print(Fore.RED + f"[{session_name}] Banned from group: {group.title}")
+                    return
+                except errors.FloodWaitError as e:
+                    print(Fore.YELLOW + f"[{session_name}] Flood wait: {e.seconds}s")
+                    await asyncio.sleep(e.seconds + 2)
+                    return
 
-                log_msg = f"""
-🚨 Netflix Keyword Triggered!
+                # Delay before DM (human-like)
+                await asyncio.sleep(random.randint(3, 7))
 
-👤 User: [{username}](tg://user?id={user_id})
-🆔 User ID: {user_id}
-💬 Message: {msg_text}
-👥 Group: {group_name}
+                # DM user
+                try:
+                    await client.send_message(user, DM_MSG)
+                    messaged_users[key] = now
+                except Exception as e:
+                    print(Fore.RED + f"[{session_name}] DM failed: {e}")
+                    return
+
+                # Log to main account
+                try:
+                    log_msg = f"""
+📣 Netflix Triggered
+
+👤 [{username}](tg://user?id={user_id})
+🆔 {user_id}
+💬 {event.raw_text}
+👥 Group: {group.title}
 """
-                await client.send_message(LOG_RECEIVER, log_msg)
+                    await client.send_message(LOG_RECEIVER, log_msg)
+                except Exception as e:
+                    print(Fore.RED + f"[{session_name}] Log DM failed: {e}")
+
         except Exception as e:
-            print(Fore.RED + f"[{session_name}] Error: {e}")
+            print(Fore.RED + f"[{session_name}] Handler error: {e}")
 
     await client.run_until_disconnected()
 
@@ -106,7 +134,7 @@ async def main():
         print(Fore.RED + "No session .json files found.")
         return
 
-    print(Fore.GREEN + f"Starting {len(json_files)} session(s)...")
+    print(Fore.GREEN + f"Loading {len(json_files)} session(s)...")
 
     tasks = [handle_session(f) for f in json_files]
     tasks.append(start_web_server())

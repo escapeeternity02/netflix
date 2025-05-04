@@ -5,7 +5,7 @@ from telethon.tl.functions.messages import SendMessageRequest
 from telethon.tl.types import PeerUser
 
 API_ID = int(os.getenv("27400047"))
-API_HASH = os.getenv("269da89bed4c8e8137045e10794a2bc1")
+AAPI_HASH = os.getenv("269da89bed4c8e8137045e10794a2bc1"))
 LOG_RECEIVER = "EscapeEternity"  # No @ needed
 
 KEYWORDS = [

@@ -11,7 +11,6 @@ from aiohttp import web
 
 init(autoreset=True)
 
-CREDENTIALS_FOLDER = "/mnt/data/sessions"  # Ensure this is set for persistent storage in Render
 LOG_RECEIVER = "EscapeEternity"
 MAX_DMS_PER_HOUR = 4
 
@@ -81,26 +80,19 @@ async def dm_worker(client):
                 print(Fore.RED + f"[DM ERROR] {e}")
         await asyncio.sleep(10)
 
-async def handle_session(session_path):
-    with open(session_path, "r") as f:
-        credentials = json.load(f)
-
-    session_name = os.path.splitext(os.path.basename(session_path))[0]
-    proxy = tuple(credentials.get("proxy", [])) or None
-
-    client = TelegramClient(
-        os.path.join(CREDENTIALS_FOLDER, session_name),
-        credentials["api_id"],
-        credentials["api_hash"],
-        proxy=proxy
-    )
+async def handle_session():
+    # Set up the credentials directly or use environment variables for API ID and Hash
+    api_id = os.getenv("API_ID")  # Set this environment variable in Render
+    api_hash = os.getenv("API_HASH")  # Set this environment variable in Render
+    session_name = "bot_session"  # Use a default session name (no need for files)
+    client = TelegramClient(session_name, api_id, api_hash)
 
     await client.connect()
     if not await client.is_user_authorized():
-        print(Fore.RED + f"[{session_name}] Session unauthorized.")
+        print(Fore.RED + f"Session unauthorized.")
         return
 
-    print(Fore.GREEN + f"[{session_name}] Running...")
+    print(Fore.GREEN + f"Running...")
 
     asyncio.create_task(dm_worker(client))
 
@@ -119,18 +111,18 @@ async def handle_session(session_path):
             user_id = user.id
             username = user.username or "no username"
 
-            print(Fore.CYAN + f"[{session_name}] Trigger -> {user_id} in {group.title}: {event.raw_text}")
+            print(Fore.CYAN + f"Trigger -> {user_id} in {group.title}: {event.raw_text}")
 
             try:
                 await event.reply(REPLY_MSG)
-                print(Fore.YELLOW + f"[{session_name}] Replied in group {group.title}")
+                print(Fore.YELLOW + f"Replied in group {group.title}")
             except Exception as e:
-                print(Fore.RED + f"[{session_name}] Group reply failed: {e}")
+                print(Fore.RED + f"Group reply failed: {e}")
 
             if user_id not in messaged_users and len(dm_timestamps) < MAX_DMS_PER_HOUR:
                 dm_queue.append((user, DM_MSG))
                 messaged_users.add(user_id)
-                print(Fore.MAGENTA + f"[{session_name}] Queued DM to {username}")
+                print(Fore.MAGENTA + f"Queued DM to {username}")
 
             try:
                 log_msg = f"""
@@ -142,38 +134,28 @@ async def handle_session(session_path):
 👥 Group: {group.title}
 """
                 await client.send_message(LOG_RECEIVER, log_msg)
-                print(Fore.LIGHTBLUE_EX + f"[{session_name}] Logged to {LOG_RECEIVER}")
+                print(Fore.LIGHTBLUE_EX + f"Logged to {LOG_RECEIVER}")
             except Exception as e:
-                print(Fore.RED + f"[{session_name}] Log failed: {e}")
+                print(Fore.RED + f"Log failed: {e}")
 
         except Exception as e:
-            print(Fore.RED + f"[{session_name}] Handler error: {e}")
+            print(Fore.RED + f"Handler error: {e}")
 
     @client.on(events.NewMessage(incoming=True, chats=None))
     async def handle_private_message(event):
         if event.is_private:
             try:
                 await event.respond(PRIVATE_DM_RESPONSE)
-                print(Fore.LIGHTGREEN_EX + f"[{session_name}] Auto-replied to DM from {event.sender_id}")
+                print(Fore.LIGHTGREEN_EX + f"Auto-replied to DM from {event.sender_id}")
             except Exception as e:
-                print(Fore.RED + f"[{session_name}] DM auto-reply error: {e}")
+                print(Fore.RED + f"DM auto-reply error: {e}")
 
     await client.run_until_disconnected()
 
 async def main():
-    os.makedirs(CREDENTIALS_FOLDER, exist_ok=True)
-    json_files = [os.path.join(CREDENTIALS_FOLDER, f) for f in os.listdir(CREDENTIALS_FOLDER) if f.endswith(".json")]
-
-    if not json_files:
-        print(Fore.RED + "No session .json files found.")
-        return
-
-    print(Fore.GREEN + f"Loading {len(json_files)} session(s)...")
-
-    tasks = [handle_session(f) for f in json_files]
-    tasks.append(start_web_server())
-
-    await asyncio.gather(*tasks)
+    # Directly run the session handling without using file-based credentials
+    await handle_session()
+    await start_web_server()
 
 if __name__ == "__main__":
     asyncio.run(main())

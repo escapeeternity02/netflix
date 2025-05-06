@@ -1,61 +1,26 @@
 import os
 import json
 import asyncio
-import random
-import re
-import time
 from telethon import TelegramClient, events, errors
-from colorama import Fore, init
+from telethon.tl.functions.messages import GetHistoryRequest
+from colorama import Fore, Style, init
+import pyfiglet
 from aiohttp import web
-from collections import deque
+import random
 
-# Initialize colorama for console output
 init(autoreset=True)
 
-# Constants
-LOG_RECEIVER = "EscapeEternity"  # Replace with your log receiver username or ID
-MAX_DMS_PER_HOUR = 4  # Max DMs allowed per hour
+CREDENTIALS_FOLDER = "sessions"
+os.makedirs(CREDENTIALS_FOLDER, exist_ok=True)
 
-# Keywords for Netflix-related messages (case-insensitive)
-KEYWORDS = [
-    "need", "want", "buy", "get", "have", "month", "screen", "account",
-    "plan", "premium", "login", "cheap", "seller", "selling", "netflix"
-]
+def display_banner():
+    banner = pyfiglet.figlet_format("ESCAPExETERNITY")
+    print(Fore.RED + banner)
+    print(Fore.GREEN + Style.BRIGHT + "Made by @EscapeEternity\n")
 
-# Default messages
-REPLY_MSG = "DM! I have in cheap."
-DM_MSG = """NETFLIX FULLY PRIVATE SCREEN ACCOUNT!!
-Price - 79rs/1$
-4K PREMIUM PLAN
-1 MONTH FULL WARRANTY 
-SEPARATE PROFILE + PIN 
-FULLY PRIVATE & SECURED
-
-ALWAYS ESCROW 
-DM ~ @EscapeEternity"""
-
-PRIVATE_DM_RESPONSE = (
-    "This is a Bot Selling Account! To Buy DM @EscapeEternity Only. "
-    "If Limited Then DM @EscapeEternityBot"
-)
-
-# Track sent messages and DM queue
-dm_queue = deque()
-dm_timestamps = []
-messaged_users = set()  # To avoid sending multiple DMs to the same user
-
-# Function to normalize text (case-insensitive)
-def normalize_text(text):
-    return re.sub(r'[^\w\s]', '', text).lower()
-
-# Function to check if a message contains Netflix-related keywords
-def contains_keywords(text):
-    return "netflix" in text and any(k in text for k in KEYWORDS if k != "netflix")
-
-# Web server to keep the app alive (useful for cloud hosting platforms)
 async def start_web_server():
     async def handle(request):
-        return web.Response(text="Service is running!")  # A simple endpoint to keep the service alive
+        return web.Response(text="Service is running!")
 
     app = web.Application()
     app.router.add_get('/', handle)
@@ -63,34 +28,97 @@ async def start_web_server():
     await runner.setup()
     site = web.TCPSite(runner, '0.0.0.0', int(os.environ.get("PORT", 10000)))
     await site.start()
-    print(Fore.YELLOW + "Web server started.")
+    print(Fore.YELLOW + "Web server started to keep Render service alive.")
 
-# Function to send DMs in a controlled manner (with hourly limits)
-async def dm_worker(client):
+# Human-like random messages
+human_messages_pool = [
+    "Hey, how's it going?",
+    "What’s up everyone?",
+    "Anyone active here?",
+    "Just checking in!",
+    "Hope you're all good!",
+    "Hello from the other side!",
+    "Haha, what's happening?",
+    "Good vibes only!",
+    "How are you guys doing?",
+    "Any updates today?"
+]
+
+def get_random_casual_message(used_messages):
+    if len(used_messages) >= len(human_messages_pool):
+        used_messages.clear()
+    remaining = list(set(human_messages_pool) - used_messages)
+    msg = random.choice(remaining)
+    used_messages.add(msg)
+    return msg
+
+async def auto_pro_sender(client, delay_after_all_groups):
+    session_id = client.session.filename.split('/')[-1]
+    num_messages = 1
+    min_delay = 30
+    max_delay = 60
+
+    used_casuals = set()
+
     while True:
-        now = time.time()
-        while dm_timestamps and now - dm_timestamps[0] > 3600:
-            dm_timestamps.pop(0)
+        try:
+            history = await client(GetHistoryRequest(
+                peer="me", limit=num_messages,
+                offset_date=None, offset_id=0,
+                max_id=0, min_id=0,
+                add_offset=0, hash=0))
+            if not history.messages:
+                print(Fore.RED + f"No messages in Saved Messages for {session_id}.")
+                await asyncio.sleep(60)
+                continue
 
-        if dm_queue and len(dm_timestamps) < MAX_DMS_PER_HOUR:
-            user, msg = dm_queue.popleft()
-            try:
-                await client.send_message(user, msg)
-                dm_timestamps.append(time.time())
-                print(Fore.GREEN + f"[DM SENT] -> {user.id}")
-            except Exception as e:
-                print(Fore.RED + f"[DM ERROR] {e}")
-        await asyncio.sleep(10)
+            saved_messages = history.messages
+            print(Fore.CYAN + f"{len(saved_messages)} saved message(s) loaded.\n")
 
-# Function to handle login and sessions
-async def handle_login():
+            groups = sorted(
+                [d for d in await client.get_dialogs() if d.is_group],
+                key=lambda g: g.name.lower() if g.name else ""
+            )
+
+            repeat = 1
+            while True:
+                print(Fore.CYAN + f"\nStarting repetition {repeat}")
+                for group in groups:
+                    try:
+                        if random.randint(1, 100) <= random.randint(10, 15):  # 10–15% chance
+                            text = get_random_casual_message(used_casuals)
+                            await client.send_message(group.id, text)
+                            print(Fore.MAGENTA + f"[Casual] Sent '{text}' to {group.name or group.id}")
+                        else:
+                            msg = saved_messages[0]
+                            await client.forward_messages(group.id, msg.id, "me")
+                            print(Fore.GREEN + f"Forwarded saved message to: {group.name or group.id}")
+
+                        delay = random.uniform(min_delay, max_delay)
+                        print(Fore.YELLOW + f"Waiting {int(delay)}s before next group...")
+                        await asyncio.sleep(delay)
+
+                    except Exception as e:
+                        print(Fore.RED + f"Error sending to {group.name or group.id}: {e}")
+
+                print(Fore.CYAN + f"\nCompleted repetition {repeat}. Waiting {delay_after_all_groups} seconds...")
+                await asyncio.sleep(delay_after_all_groups)
+                repeat += 1
+
+        except Exception as e:
+            print(Fore.RED + f"Error in auto_pro_sender: {e}")
+            print(Fore.YELLOW + "Retrying in 30 seconds...")
+            await asyncio.sleep(30)
+
+async def main():
+    display_banner()
+
     session_name = "session1"
-    path = os.path.join("sessions", f"{session_name}.json")
+    path = os.path.join(CREDENTIALS_FOLDER, f"{session_name}.json")
 
     if not os.path.exists(path):
-        print(Fore.RED + f"Credentials file {path} not found. Initializing session.")
-        await create_session(session_name)
-        return await handle_login()  # Try login again after initializing session
+        print(Fore.RED + f"Credentials file {path} not found.")
+        return
 
     with open(path, "r") as f:
         credentials = json.load(f)
@@ -98,111 +126,40 @@ async def handle_login():
     proxy = credentials.get("proxy")
     proxy_args = tuple(proxy) if proxy else None
 
-    client = TelegramClient(
-        os.path.join("sessions", session_name),
-        credentials["api_id"],
-        credentials["api_hash"],
-        proxy=proxy_args
-    )
-
-    await client.connect()
-    if not await client.is_user_authorized():
-        print(Fore.RED + "Session not authorized.")
-        return client
-
-    print(Fore.GREEN + f"Logged in as {client.get_me().username}")
-    return client
-
-# Function to create the session if it doesn't exist
-async def create_session(session_name):
-    api_id = "your_api_id"  # Replace with your API ID
-    api_hash = "your_api_hash"  # Replace with your API hash
-
-    # Initialize the client and connect
-    client = TelegramClient(session_name, api_id, api_hash)
-    await client.start()
-
-    print("Please authorize to create a session.")
-
-    await client.disconnect()
-
-# Function to handle keyword-triggered actions
-async def handle_keyword_trigger(client, event):
-    try:
-        if event.is_private or event.out or event.fwd_from:
-            return
-
-        message_text = normalize_text(event.raw_text)
-        if not contains_keywords(message_text):
-            return
-
-        group = await event.get_chat()
-        user = await event.get_sender()
-        user_id = user.id
-        username = user.username or "no username"
-
-        print(Fore.CYAN + f"Trigger -> {user_id} in {group.title}: {event.raw_text}")
-
+    while True:
         try:
-            await event.reply(REPLY_MSG)
-            print(Fore.YELLOW + f"Replied in group {group.title}")
+            client = TelegramClient(
+                os.path.join(CREDENTIALS_FOLDER, session_name),
+                credentials["api_id"],
+                credentials["api_hash"],
+                proxy=proxy_args
+            )
+
+            await client.connect()
+            if not await client.is_user_authorized():
+                print(Fore.RED + "Session not authorized.")
+                return
+
+            # 💬 Auto-reply to DMs
+            @client.on(events.NewMessage(incoming=True))
+            async def handler(event):
+                if event.is_private and not event.out:
+                    try:
+                        await event.reply("This is AdBot Account. If you want anything then contact @EscapeEternity!")
+                        print(Fore.BLUE + f"Auto-replied to {event.sender_id}")
+                    except Exception as e:
+                        print(Fore.RED + f"Failed to reply to {event.sender_id}: {e}")
+
+            print(Fore.GREEN + "Starting message sender...")
+
+            await asyncio.gather(
+                start_web_server(),
+                auto_pro_sender(client, delay_after_all_groups=720)  # 12 minutes
+            )
         except Exception as e:
-            print(Fore.RED + f"Group reply failed: {e}")
-
-        if user_id not in messaged_users and len(dm_timestamps) < MAX_DMS_PER_HOUR:
-            dm_queue.append((user, DM_MSG))
-            messaged_users.add(user_id)
-            print(Fore.MAGENTA + f"Queued DM to {username}")
-
-        try:
-            log_msg = f"""
-📣 Netflix Triggered
-
-👤 [{username}](tg://user?id={user_id})
-🆔 {user_id}
-💬 {event.raw_text}
-👥 Group: {group.title}
-"""
-            await client.send_message(LOG_RECEIVER, log_msg)
-            print(Fore.LIGHTBLUE_EX + f"Logged to {LOG_RECEIVER}")
-        except Exception as e:
-            print(Fore.RED + f"Log failed: {e}")
-
-    except Exception as e:
-        print(Fore.RED + f"Handler error: {e}")
-
-# Function to handle direct messages to the bot
-async def handle_private_message(event):
-    if event.is_private:
-        try:
-            await event.respond(PRIVATE_DM_RESPONSE)
-            print(Fore.LIGHTGREEN_EX + f"Auto-replied to DM from {event.sender_id}")
-        except Exception as e:
-            print(Fore.RED + f"DM auto-reply error: {e}")
-
-# Main function
-async def main():
-    client = await handle_login()
-
-    if not client:
-        return
-
-    await client.start()
-
-    # Handling incoming group messages
-    @client.on(events.NewMessage(incoming=True))
-    async def keyword_handler(event):
-        await handle_keyword_trigger(client, event)
-
-    # Handling incoming DMs
-    @client.on(events.NewMessage(incoming=True, chats=None))
-    async def dm_handler(event):
-        await handle_private_message(event)
-
-    await asyncio.gather(
-        start_web_server(),
-        dm_worker(client)  # Start the DM worker to process queued DMs
-    )
+            print(Fore.RED + f"Error in main loop: {e}")
+            print(Fore.YELLOW + "Reconnecting in 30 seconds...")
+            await asyncio.sleep(30)
 
 if __name__ == "__main__":
     asyncio.run(main())

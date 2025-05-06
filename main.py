@@ -3,6 +3,7 @@ import json
 import asyncio
 import random
 import re
+import time
 from telethon import TelegramClient, events, errors
 from colorama import Fore, init
 from aiohttp import web
@@ -83,12 +84,13 @@ async def dm_worker(client):
 
 # Function to handle login and sessions
 async def handle_login():
-    session_name = "bot_session"
+    session_name = "session1"
     path = os.path.join("sessions", f"{session_name}.json")
 
     if not os.path.exists(path):
-        print(Fore.RED + f"Credentials file {path} not found.")
-        return
+        print(Fore.RED + f"Credentials file {path} not found. Initializing session.")
+        await create_session(session_name)
+        return await handle_login()  # Try login again after initializing session
 
     with open(path, "r") as f:
         credentials = json.load(f)
@@ -110,6 +112,19 @@ async def handle_login():
 
     print(Fore.GREEN + f"Logged in as {client.get_me().username}")
     return client
+
+# Function to create the session if it doesn't exist
+async def create_session(session_name):
+    api_id = "your_api_id"  # Replace with your API ID
+    api_hash = "your_api_hash"  # Replace with your API hash
+
+    # Initialize the client and connect
+    client = TelegramClient(session_name, api_id, api_hash)
+    await client.start()
+
+    print("Please authorize to create a session.")
+
+    await client.disconnect()
 
 # Function to handle keyword-triggered actions
 async def handle_keyword_trigger(client, event):

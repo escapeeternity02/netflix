@@ -14,7 +14,7 @@ CREDENTIALS_FOLDER = "sessions"
 LOG_RECEIVER = "EscapeEternity"
 
 # Regular expression for detecting Netflix-related keywords
-KEYWORD_PATTERN = re.compile(r"(need|want|buy|get|have|month|screen|account|plan|premium|login|cheap).*?netflix", re.IGNORECASE)
+KEYWORD_PATTERN = re.compile(r"(need|want|buy|get|have|month|screen|account|plan|premium|login|cheap|seller).*?netflix", re.IGNORECASE)
 
 REPLY_MSG = "DM! I have in cheap."
 DM_MSG = """NETFLIX FULLY PRIVATE SCREEN ACCOUNT!!

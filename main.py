@@ -5,9 +5,8 @@ import time
 import random
 import re
 from telethon import TelegramClient, events, errors
-from aiohttp import web
-from colorama import Fore, init
 from collections import deque
+from colorama import Fore, init
 
 init(autoreset=True)
 
@@ -138,7 +137,7 @@ async def handle_session(session_path):
             except Exception as e:
                 print(Fore.RED + f"[{session_name}] Group reply failed: {e}")
 
-            # DM only if not already messaged this session
+            # DM only if not already messaged this session and user is not already in the queue
             if user_id not in messaged_users and len(dm_timestamps) < MAX_DMS_PER_HOUR:
                 dm_queue.append((user, current_dm_msg))
                 messaged_users.add(user_id)

@@ -1,22 +1,46 @@
 import os
 import json
 import asyncio
-from telethon import TelegramClient, events, errors
-from telethon.tl.functions.messages import GetHistoryRequest
-from colorama import Fore, Style, init
-import pyfiglet
-from aiohttp import web
+import time
 import random
+import re
+from telethon import TelegramClient, events, errors
+from aiohttp import web
+from colorama import Fore, init
+from collections import deque
 
 init(autoreset=True)
 
 CREDENTIALS_FOLDER = "sessions"
-os.makedirs(CREDENTIALS_FOLDER, exist_ok=True)
+LOG_RECEIVER = "EscapeEternity"
+MAX_DMS_PER_HOUR = 4
 
-def display_banner():
-    banner = pyfiglet.figlet_format("ESCAPExETERNITY")
-    print(Fore.RED + banner)
-    print(Fore.GREEN + Style.BRIGHT + "Made by @EscapeEternity\n")
+# Expanded keyword detection
+KEYWORDS = [
+    "need", "want", "buy", "get", "have", "month", "screen", "account",
+    "plan", "premium", "login", "cheap", "seller", "netflix"
+]
+KEYWORD_PATTERN = re.compile(r"|".join(rf"\b{k}\b" for k in KEYWORDS), re.IGNORECASE)
+
+REPLY_MSG = "DM! I have in cheap."
+DM_MSG = """NETFLIX FULLY PRIVATE SCREEN ACCOUNT!!
+Price - 79rs/1$
+4K PREMIUM PLAN
+1 MONTH FULL WARRANTY 
+SEPARATE PROFILE + PIN 
+FULLY PRIVATE & SECURED
+
+ALWAYS ESCROW 
+DM ~ @EscapeEternity"""
+FOLLOWUP_MSG = "This is BotAccount so DM @EscapeEternity for Anything!"
+
+messaged_users = {}
+dm_queue = deque()
+last_hour_timestamp = 0
+dm_sent_this_hour = 0
+
+def normalize_text(text):
+    return re.sub(r'[^\w\s]', '', text.lower())
 
 async def start_web_server():
     async def handle(request):
@@ -28,138 +52,109 @@ async def start_web_server():
     await runner.setup()
     site = web.TCPSite(runner, '0.0.0.0', int(os.environ.get("PORT", 10000)))
     await site.start()
-    print(Fore.YELLOW + "Web server started to keep Render service alive.")
+    print(Fore.YELLOW + "Web server started.")
 
-# Human-like random messages
-human_messages_pool = [
-    "Hey, how's it going?",
-    "What’s up everyone?",
-    "Anyone active here?",
-    "Just checking in!",
-    "Hope you're all good!",
-    "Hello from the other side!",
-    "Haha, what's happening?",
-    "Good vibes only!",
-    "How are you guys doing?",
-    "Any updates today?"
-]
-
-def get_random_casual_message(used_messages):
-    if len(used_messages) >= len(human_messages_pool):
-        used_messages.clear()
-    remaining = list(set(human_messages_pool) - used_messages)
-    msg = random.choice(remaining)
-    used_messages.add(msg)
-    return msg
-
-async def auto_pro_sender(client, delay_after_all_groups):
-    session_id = client.session.filename.split('/')[-1]
-    num_messages = 1
-    min_delay = 30
-    max_delay = 60
-
-    used_casuals = set()
-
+async def dm_worker(client):
+    global last_hour_timestamp, dm_sent_this_hour
     while True:
-        try:
-            history = await client(GetHistoryRequest(
-                peer="me", limit=num_messages,
-                offset_date=None, offset_id=0,
-                max_id=0, min_id=0,
-                add_offset=0, hash=0))
-            if not history.messages:
-                print(Fore.RED + f"No messages in Saved Messages for {session_id}.")
-                await asyncio.sleep(60)
-                continue
+        now = time.time()
+        if now - last_hour_timestamp >= 3600:
+            dm_sent_this_hour = 0
+            last_hour_timestamp = now
 
-            saved_messages = history.messages
-            print(Fore.CYAN + f"{len(saved_messages)} saved message(s) loaded.\n")
+        if dm_queue and dm_sent_this_hour < MAX_DMS_PER_HOUR:
+            user, msg = dm_queue.popleft()
+            try:
+                await client.send_message(user, msg)
+                print(Fore.GREEN + f"[DM SENT] -> {user.id}")
+                dm_sent_this_hour += 1
+            except Exception as e:
+                print(Fore.RED + f"[DM ERROR] {e}")
+        await asyncio.sleep(15)
 
-            groups = sorted(
-                [d for d in await client.get_dialogs() if d.is_group],
-                key=lambda g: g.name.lower() if g.name else ""
-            )
-
-            repeat = 1
-            while True:
-                print(Fore.CYAN + f"\nStarting repetition {repeat}")
-                for group in groups:
-                    try:
-                        if random.randint(1, 100) <= random.randint(10, 15):  # 10–15% chance
-                            text = get_random_casual_message(used_casuals)
-                            await client.send_message(group.id, text)
-                            print(Fore.MAGENTA + f"[Casual] Sent '{text}' to {group.name or group.id}")
-                        else:
-                            msg = saved_messages[0]
-                            await client.forward_messages(group.id, msg.id, "me")
-                            print(Fore.GREEN + f"Forwarded saved message to: {group.name or group.id}")
-
-                        delay = random.uniform(min_delay, max_delay)
-                        print(Fore.YELLOW + f"Waiting {int(delay)}s before next group...")
-                        await asyncio.sleep(delay)
-
-                    except Exception as e:
-                        print(Fore.RED + f"Error sending to {group.name or group.id}: {e}")
-
-                print(Fore.CYAN + f"\nCompleted repetition {repeat}. Waiting {delay_after_all_groups} seconds...")
-                await asyncio.sleep(delay_after_all_groups)
-                repeat += 1
-
-        except Exception as e:
-            print(Fore.RED + f"Error in auto_pro_sender: {e}")
-            print(Fore.YELLOW + "Retrying in 30 seconds...")
-            await asyncio.sleep(30)
-
-async def main():
-    display_banner()
-
-    session_name = "session1"
-    path = os.path.join(CREDENTIALS_FOLDER, f"{session_name}.json")
-
-    if not os.path.exists(path):
-        print(Fore.RED + f"Credentials file {path} not found.")
-        return
-
-    with open(path, "r") as f:
+async def handle_session(session_path):
+    with open(session_path, "r") as f:
         credentials = json.load(f)
 
-    proxy = credentials.get("proxy")
-    proxy_args = tuple(proxy) if proxy else None
+    session_name = os.path.splitext(os.path.basename(session_path))[0]
+    proxy = tuple(credentials.get("proxy", [])) or None
 
-    while True:
+    client = TelegramClient(
+        os.path.join(CREDENTIALS_FOLDER, session_name),
+        credentials["api_id"],
+        credentials["api_hash"],
+        proxy=proxy
+    )
+
+    await client.connect()
+    if not await client.is_user_authorized():
+        print(Fore.RED + f"[{session_name}] Session unauthorized.")
+        return
+
+    print(Fore.GREEN + f"[{session_name}] Running...")
+
+    asyncio.create_task(dm_worker(client))
+
+    @client.on(events.NewMessage(incoming=True))
+    async def keyword_handler(event):
         try:
-            client = TelegramClient(
-                os.path.join(CREDENTIALS_FOLDER, session_name),
-                credentials["api_id"],
-                credentials["api_hash"],
-                proxy=proxy_args
-            )
+            if event.is_private or event.out or event.fwd_from:
+                return  # Skip private, outgoing or forwarded messages
 
-            await client.connect()
-            if not await client.is_user_authorized():
-                print(Fore.RED + "Session not authorized.")
+            message_text = normalize_text(event.raw_text)
+            if not KEYWORD_PATTERN.search(message_text) or "netflix" not in message_text:
                 return
 
-            # 💬 Auto-reply to DMs
-            @client.on(events.NewMessage(incoming=True))
-            async def handler(event):
-                if event.is_private and not event.out:
-                    try:
-                        await event.reply("This is AdBot Account. If you want anything then contact @EscapeEternity!")
-                        print(Fore.BLUE + f"Auto-replied to {event.sender_id}")
-                    except Exception as e:
-                        print(Fore.RED + f"Failed to reply to {event.sender_id}: {e}")
+            group = await event.get_chat()
+            user = await event.get_sender()
+            user_id = user.id
+            username = user.username or "no username"
+            key = f"{user_id}"
 
-            print(Fore.GREEN + "Starting message sender...")
+            now = time.time()
+            if key in messaged_users and now - messaged_users[key] < 3600:
+                print(Fore.MAGENTA + f"[{session_name}] Skipping repeat user: {username}")
+                return
 
-            await asyncio.gather(
-                start_web_server(),
-                auto_pro_sender(client, delay_after_all_groups=720)  # 12 minutes
-            )
+            await event.reply(REPLY_MSG)
+            print(Fore.CYAN + f"[{session_name}] Replied in group: {group.title} -> {username}")
+
+            messaged_users[key] = now
+            dm_queue.append((user, DM_MSG))
+
+            # Logging to console
+            print(Fore.YELLOW + f"[{session_name}] Queued DM to {username} ({user_id})")
+
+            # Logging to main account
+            log_msg = f"""
+📣 Netflix Triggered
+
+👤 [{username}](tg://user?id={user_id})
+🆔 {user_id}
+💬 {event.raw_text}
+👥 Group: {group.title}
+"""
+            await client.send_message(LOG_RECEIVER, log_msg)
+
         except Exception as e:
-            print(Fore.RED + f"Error in main loop: {e}")
-            print(Fore.YELLOW + "Reconnecting in 30 seconds...")
-            await asyncio.sleep(30)
+            print(Fore.RED + f"[{session_name}] Handler error: {e}")
+
+    await client.run_until_disconnected()
+
+async def main():
+    os.makedirs(CREDENTIALS_FOLDER, exist_ok=True)
+    json_files = [os.path.join(CREDENTIALS_FOLDER, f) for f in os.listdir(CREDENTIALS_FOLDER) if f.endswith(".json")]
+
+    if not json_files:
+        print(Fore.RED + "No session .json files found.")
+        return
+
+    print(Fore.GREEN + f"Loading {len(json_files)} session(s)...")
+
+    tasks = [handle_session(f) for f in json_files]
+    tasks.append(start_web_server())
+
+    await asyncio.gather(*tasks)
 
 if __name__ == "__main__":
     asyncio.run(main())

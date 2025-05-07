@@ -7,6 +7,8 @@ import re
 from telethon import TelegramClient, events, errors
 from collections import deque
 from colorama import Fore, init
+import aiohttp
+from aiohttp import web  # Add this import
 
 init(autoreset=True)
 
@@ -14,7 +16,7 @@ CREDENTIALS_FOLDER = "sessions"
 LOG_RECEIVER = "EscapeEternity"
 
 # Admin list (replace with your actual user ID)
-admin_ids = [123456789]  # Add your admin user ID here
+admin_ids = [6249999953]  # Add your admin user ID here
 
 # Keyword triggers
 KEYWORDS = [

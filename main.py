@@ -5,23 +5,24 @@ import time
 import random
 import re
 from telethon import TelegramClient, events, errors
-from aiohttp import web
-from colorama import Fore, init
 from collections import deque
+from colorama import Fore, init
 
 init(autoreset=True)
 
 CREDENTIALS_FOLDER = "sessions"
 LOG_RECEIVER = "EscapeEternity"
-MAX_DMS_PER_HOUR = 4
 
-# Expanded keyword detection
+# Admin list (replace with your actual user ID)
+admin_ids = [123456789]  # Add your admin user ID here
+
+# Keyword triggers
 KEYWORDS = [
     "need", "want", "buy", "get", "have", "month", "screen", "account",
-    "plan", "premium", "login", "cheap", "seller", "netflix"
+    "plan", "premium", "login", "cheap", "seller", "selling", "netflix"
 ]
-KEYWORD_PATTERN = re.compile(r"|".join(rf"\b{k}\b" for k in KEYWORDS), re.IGNORECASE)
 
+# Default messages
 REPLY_MSG = "DM! I have in cheap."
 DM_MSG = """NETFLIX FULLY PRIVATE SCREEN ACCOUNT!!
 Price - 79rs/1$
@@ -32,15 +33,27 @@ FULLY PRIVATE & SECURED
 
 ALWAYS ESCROW 
 DM ~ @EscapeEternity"""
-FOLLOWUP_MSG = "This is BotAccount so DM @EscapeEternity for Anything!"
 
-messaged_users = {}
-dm_queue = deque()
-last_hour_timestamp = 0
-dm_sent_this_hour = 0
+PRIVATE_DM_RESPONSE = (
+    "This is a Bot Selling Account! To Buy DM @EscapeEternity Only. "
+    "If Limited Then DM @EscapeEternityBot"
+)
+
+# To store custom messages for DM and group replies
+current_dm_msg = DM_MSG
+current_group_msg = REPLY_MSG
+
+# Removing the queue and timestamp management
+dm_sent_users = set()  # Track users who already received a DM
 
 def normalize_text(text):
-    return re.sub(r'[^\w\s]', '', text.lower())
+    text = re.sub(r'[^\w\s]', '', text)  # Remove punctuation
+    return text.lower()
+
+
+def contains_keywords(text):
+    return "netflix" in text and any(k in text for k in KEYWORDS if k != "netflix")
+
 
 async def start_web_server():
     async def handle(request):
@@ -54,23 +67,11 @@ async def start_web_server():
     await site.start()
     print(Fore.YELLOW + "Web server started.")
 
-async def dm_worker(client):
-    global last_hour_timestamp, dm_sent_this_hour
-    while True:
-        now = time.time()
-        if now - last_hour_timestamp >= 3600:
-            dm_sent_this_hour = 0
-            last_hour_timestamp = now
 
-        if dm_queue and dm_sent_this_hour < MAX_DMS_PER_HOUR:
-            user, msg = dm_queue.popleft()
-            try:
-                await client.send_message(user, msg)
-                print(Fore.GREEN + f"[DM SENT] -> {user.id}")
-                dm_sent_this_hour += 1
-            except Exception as e:
-                print(Fore.RED + f"[DM ERROR] {e}")
-        await asyncio.sleep(15)
+async def dm_worker(client):
+    while True:
+        await asyncio.sleep(10)  # Sleep so that the bot doesn't overwhelm the Telegram API with requests
+
 
 async def handle_session(session_path):
     with open(session_path, "r") as f:
@@ -96,37 +97,41 @@ async def handle_session(session_path):
     asyncio.create_task(dm_worker(client))
 
     @client.on(events.NewMessage(incoming=True))
-    async def keyword_handler(event):
+    async def group_keyword_handler(event):
         try:
             if event.is_private or event.out or event.fwd_from:
-                return  # Skip private, outgoing or forwarded messages
+                return  # Skip private, outgoing, or forwarded messages
 
             message_text = normalize_text(event.raw_text)
-            if not KEYWORD_PATTERN.search(message_text) or "netflix" not in message_text:
-                return
+            if not contains_keywords(message_text):
+                return  # Skip if the message doesn't contain the keyword
 
             group = await event.get_chat()
             user = await event.get_sender()
             user_id = user.id
             username = user.username or "no username"
-            key = f"{user_id}"
 
-            now = time.time()
-            if key in messaged_users and now - messaged_users[key] < 3600:
-                print(Fore.MAGENTA + f"[{session_name}] Skipping repeat user: {username}")
-                return
+            print(Fore.CYAN + f"[{session_name}] Trigger -> {user_id} in {group.title}: {event.raw_text}")
 
-            await event.reply(REPLY_MSG)
-            print(Fore.CYAN + f"[{session_name}] Replied in group: {group.title} -> {username}")
+            # Always reply in group
+            try:
+                await event.reply(current_group_msg)
+                print(Fore.YELLOW + f"[{session_name}] Replied in group {group.title}")
+            except Exception as e:
+                print(Fore.RED + f"[{session_name}] Group reply failed: {e}")
 
-            messaged_users[key] = now
-            dm_queue.append((user, DM_MSG))
+            # Send DM without limit and without ignoring repeated users
+            if user_id not in dm_sent_users:
+                try:
+                    await client.send_message(user, current_dm_msg)
+                    dm_sent_users.add(user_id)  # Mark this user as messaged
+                    print(Fore.MAGENTA + f"[{session_name}] Sent DM to {username}")
+                except Exception as e:
+                    print(Fore.RED + f"[{session_name}] DM failed: {e}")
 
-            # Logging to console
-            print(Fore.YELLOW + f"[{session_name}] Queued DM to {username} ({user_id})")
-
-            # Logging to main account
-            log_msg = f"""
+            # Log to admin
+            try:
+                log_msg = f"""
 📣 Netflix Triggered
 
 👤 [{username}](tg://user?id={user_id})
@@ -134,12 +139,112 @@ async def handle_session(session_path):
 💬 {event.raw_text}
 👥 Group: {group.title}
 """
-            await client.send_message(LOG_RECEIVER, log_msg)
+                await client.send_message(LOG_RECEIVER, log_msg)
+                print(Fore.LIGHTBLUE_EX + f"[{session_name}] Logged to {LOG_RECEIVER}")
+            except Exception as e:
+                print(Fore.RED + f"[{session_name}] Log failed: {e}")
 
         except Exception as e:
             print(Fore.RED + f"[{session_name}] Handler error: {e}")
 
+    @client.on(events.NewMessage(incoming=True, chats=None))
+    async def handle_private_message(event):
+        if event.is_private:
+            try:
+                # Respond to anyone who DMs the bot
+                await event.respond(PRIVATE_DM_RESPONSE)
+                print(Fore.LIGHTGREEN_EX + f"[{session_name}] Auto-replied to DM from {event.sender_id}")
+            except Exception as e:
+                print(Fore.RED + f"[{session_name}] DM auto-reply error: {e}")
+
+    @client.on(events.NewMessage(incoming=True, chats=None))
+    async def admin_commands(event):
+        if event.is_private and event.sender_id in admin_ids:
+            msg = event.raw_text.strip().lower()
+
+            if msg == "/pause":
+                print(Fore.GREEN + f"[{session_name}] DM sending paused by admin")
+                await event.respond("✅ DM sending paused.")
+                global dm_sent_users
+                dm_sent_users = set()  # Clear the sent user list
+            elif msg == "/resume":
+                print(Fore.GREEN + f"[{session_name}] DM sending resumed by admin")
+                await event.respond("✅ DM sending resumed.")
+            elif msg == "/status":
+                await event.respond(f"Users who received DM: {len(dm_sent_users)}")
+            elif msg == "/clearqueue":
+                dm_sent_users.clear()
+                await event.respond("✅ DM user list cleared.")
+            elif msg.startswith("/addadmin"):
+                parts = msg.split()
+                if len(parts) > 1:
+                    new_admin_id = int(parts[1])
+                    if new_admin_id not in admin_ids:
+                        admin_ids.append(new_admin_id)
+                        await event.respond(f"✅ Added new admin: {new_admin_id}")
+                    else:
+                        await event.respond("❌ This user is already an admin.")
+                else:
+                    await event.respond("❌ Please provide a valid user ID.")
+            elif msg.startswith("/removeadmin"):
+                parts = msg.split()
+                if len(parts) > 1:
+                    remove_admin_id = int(parts[1])
+                    if remove_admin_id in admin_ids:
+                        admin_ids.remove(remove_admin_id)
+                        await event.respond(f"✅ Removed admin: {remove_admin_id}")
+                    else:
+                        await event.respond("❌ This user is not an admin.")
+                else:
+                    await event.respond("❌ Please provide a valid user ID.")
+            elif msg == "/shutdown":
+                await event.respond("🔴 Shutting down bot...")
+                await client.disconnect()
+            elif msg.startswith("/send"):
+                parts = msg.split(maxsplit=2)
+                if len(parts) == 3:
+                    user_id = int(parts[1])
+                    message = parts[2]
+                    try:
+                        user = await client.get_entity(user_id)
+                        await client.send_message(user, message)
+                        await event.respond(f"✅ Message sent to {user_id}")
+                    except Exception as e:
+                        await event.respond(f"❌ Error sending message: {e}")
+            elif msg.startswith("/changedmmsg"):
+                new_msg = msg[13:].strip()  # Extract message after command
+                if new_msg:
+                    global current_dm_msg
+                    current_dm_msg = new_msg
+                    await event.respond(f"✅ DM message updated.")
+                else:
+                    await event.respond("❌ Please provide a valid message.")
+            elif msg.startswith("/changegroupmsg"):
+                new_msg = msg[16:].strip()  # Extract message after command
+                if new_msg:
+                    global current_group_msg
+                    current_group_msg = new_msg
+                    await event.respond(f"✅ Group reply message updated.")
+                else:
+                    await event.respond("❌ Please provide a valid message.")
+            elif msg == "/help":
+                help_text = (
+                    "Here are the available admin commands:\n\n"
+                    "/pause - Pauses DM sending\n"
+                    "/resume - Resumes DM sending\n"
+                    "/status - Shows current DM queue size\n"
+                    "/clearqueue - Clears the DM queue\n"
+                    "/addadmin <user_id> - Adds a new admin\n"
+                    "/removeadmin <user_id> - Removes an admin\n"
+                    "/shutdown - Shuts down the bot\n"
+                    "/send <user_id> <message> - Sends a message manually\n"
+                    "/changedmmsg <message> - Changes DM message\n"
+                    "/changegroupmsg <message> - Changes group reply message\n"
+                )
+                await event.respond(help_text)
+
     await client.run_until_disconnected()
+
 
 async def main():
     os.makedirs(CREDENTIALS_FOLDER, exist_ok=True)
@@ -155,6 +260,7 @@ async def main():
     tasks.append(start_web_server())
 
     await asyncio.gather(*tasks)
+
 
 if __name__ == "__main__":
     asyncio.run(main())

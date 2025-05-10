@@ -11,14 +11,19 @@ init(autoreset=True)
 CREDENTIALS_FOLDER = "sessions"
 LOG_RECEIVER = "EscapeEternity"
 
+# Admin list (replace with your actual user ID)
 admin_ids = [6249999953]
+
+# Blacklisted users
 blacklisted_users = set()
 
+# Keyword triggers
 KEYWORDS = [
     "need", "want", "buy", "get", "have", "month", "screen", "account",
     "plan", "premium", "login", "cheap", "seller", "selling", "netflix"
 ]
 
+# Default messages
 REPLY_MSG = "DM karo! Sasta milega."
 DM_MSG = """NETFLIX FULLY PRIVATE SCREEN ACCOUNT!!
 Price - ₹79 / $1
@@ -31,17 +36,19 @@ ALWAYS ESCROW
 DM ~ @EscapeEternity"""
 
 PRIVATE_DM_RESPONSE = (
-    "Yeh bot hai jo accounts bechta hai! Kharidne ke liye sirf @EscapeEternity ko DM karo. "
-    "Agar limited ho toh @EscapeEternityBot ko DM karo."
+    "This is a Bot Account, So if you want to Buy Netflix then DM @EscapeEternity!"
+    "If your Limited then DM @EscapeEternityBot"
 )
 
+# To store custom messages for DM and group replies
 current_dm_msg = DM_MSG
 current_group_msg = REPLY_MSG
 
-dm_sent_users = set()
+# Removing the queue and timestamp management
+dm_sent_users = set()  # Track users who already received a DM
 
 def normalize_text(text):
-    text = re.sub(r'[^\w\s]', '', text)
+    text = re.sub(r'[^\w\s]', '', text)  # Remove punctuation
     return text.lower()
 
 def contains_keywords(text):
@@ -84,36 +91,39 @@ async def handle_session(session_path):
     async def group_keyword_handler(event):
         try:
             if event.is_private or event.out or event.fwd_from:
-                return
+                return  # Skip private, outgoing, or forwarded messages
 
             user = await event.get_sender()
             user_id = user.id
             if user_id in blacklisted_users:
-                return
+                return  # Skip blacklisted users
 
             message_text = normalize_text(event.raw_text)
             if not contains_keywords(message_text):
-                return
+                return  # Skip if the message doesn't contain the keyword
 
             group = await event.get_chat()
             username = user.username or "no username"
 
             print(Fore.CYAN + f"[{session_name}] Trigger -> {user_id} in {group.title}: {event.raw_text}")
 
+            # Always reply in group
             try:
                 await event.reply(current_group_msg)
                 print(Fore.YELLOW + f"[{session_name}] Replied in group {group.title}")
             except Exception as e:
                 print(Fore.RED + f"[{session_name}] Group reply failed: {e}")
 
+            # Send DM without limit and without ignoring repeated users
             if user_id not in dm_sent_users:
                 try:
                     await client.send_message(user, current_dm_msg)
-                    dm_sent_users.add(user_id)
+                    dm_sent_users.add(user_id)  # Mark this user as messaged
                     print(Fore.MAGENTA + f"[{session_name}] Sent DM to {username}")
                 except Exception as e:
                     print(Fore.RED + f"[{session_name}] DM failed: {e}")
 
+            # Log to admin
             try:
                 log_msg = f"""
 📣 Netflix Triggered
@@ -135,6 +145,7 @@ async def handle_session(session_path):
     async def handle_private_message(event):
         if event.is_private:
             try:
+                # Respond to anyone who DMs the bot
                 await event.respond(PRIVATE_DM_RESPONSE)
                 print(Fore.LIGHTGREEN_EX + f"[{session_name}] Auto-replied to DM from {event.sender_id}")
             except Exception as e:
@@ -150,7 +161,7 @@ async def handle_session(session_path):
                 print(Fore.GREEN + f"[{session_name}] DM sending paused by admin")
                 await event.respond("✅ DM sending paused.")
                 global dm_sent_users
-                dm_sent_users = set()
+                dm_sent_users = set()  # Clear the sent user list
             elif command == "/resume":
                 print(Fore.GREEN + f"[{session_name}] DM sending resumed by admin")
                 await event.respond("✅ DM sending resumed.")
@@ -196,7 +207,7 @@ async def handle_session(session_path):
                     except Exception as e:
                         await event.respond(f"❌ Error sending message: {e}")
             elif command.startswith("/changedmmsg"):
-                new_msg = msg[13:].strip()
+                new_msg = msg[13:].strip()  # Extract message after command
                 if new_msg:
                     global current_dm_msg
                     current_dm_msg = new_msg
@@ -204,7 +215,7 @@ async def handle_session(session_path):
                 else:
                     await event.respond("❌ Please provide a valid message.")
             elif command.startswith("/changegroupmsg"):
-                new_msg = msg[16:].strip()
+                new_msg = msg[16:].strip()  # Extract message after command
                 if new_msg:
                     global current_group_msg
                     current_group_msg = new_msg
@@ -250,6 +261,12 @@ async def main():
         print(Fore.RED + "No session .json files found.")
         return
 
-    print(Fore.GREEN + f"Loading {len(json_files
-::contentReference[oaicite:21]{index=21}
- 
+    print(Fore.GREEN + f"Loading {len(json_files)} sessions...")
+
+    tasks = [handle_session(f) for f in json_files]
+    tasks.append(start_web_server())
+
+    await asyncio.gather(*tasks)
+
+if __name__ == "__main__":
+    asyncio.run(main())
